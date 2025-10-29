@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Puzzelo — responsive snap-lock puzzle</title>
+<style>
+  :root{
+    --accent:#4f46e5;
+    --grid-line: rgba(120,120,120,0.32);
+    --max-canvas-width: 900px;
+    --gutter:18px;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+  body{
+    display:flex;justify-content:center;background:linear-gradient(180deg,#f0f6ff,#ffffff);
+    padding:28px;
+  }
+
+  .app {
+    width:100%;
+    max-width:1100px;
+    background:#fff;border-radius:14px;padding:18px;box-shadow:0 8px 30px rgba(17,24,39,0.08);
+    box-sizing:border-box;
+  }
+
+  header{display:flex;flex-direction:column;align-items:center;gap:6px}
+  h1{margin:0;color:var(--accent);font-size:1.5rem}
+  p.lead{margin:0;color:#445;font-size:0.95rem}
+
+  .controls{
+    margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;
+  }
+  select,input[type=file],button,input[type=text]{
+    padding:8px 10px;border-radius:8px;border:1px solid #e2e8f0;background:white;font-size:0.95rem;
+  }
+  button{background:var(--accent);color:#fff;border:none;cursor:pointer}
+  button:hover{opacity:.95;transform:translateY(-1px)}
+  label.inline{display:flex;gap:8px;align-items:center;color:#334}
+
+  .main{
+    margin-top:18px;display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap;justify-content:center;
+  }
+
+  /* preview */
+  .preview{
+    width:220px;min-width:160px;text-align:center;
+  }
+  .preview .thumb{width:200px;height:140px;border-radius:10px;overflow:hidden;border:1px solid #eef2ff;background:#f7fafc;display:flex;align-items:center;justify-content:center}
+  .preview img{width:100%;height:100%;object-fit:cover;display:block}
+
+  /* canvas area */
+  .canvas-area{flex:1;min-width:280px;display:flex;flex-direction:column;align-items:center;gap:10px}
+  #canvasContainer{
+    width:100%;
+    max-width:var(--max-canvas-width);
+    background:#f7faf9;border-radius:12px;padding:10px;box-sizing:border-box;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* puzzle canvas element (we size with JS) */
+  #puzzleCanvas{
+    position:relative;border-radius:8px;background:#eee;overflow:visible;
+    box-shadow:0 8px 20px rgba(2,6,23,0.06);
+  }
+
+  /* grid overlay using repeating lines — size is set via JS to cell sizes */
+  .grid-overlay{
+    position:absolute;inset:0;pointer-events:none;border-radius:8px;
+    background-image:
+      linear-gradient(0deg, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-repeat:repeat;
+    mix-blend-mode: normal;opacity:0.95;
+  }
+
+  /* tile styling */
+  .tile{
+    position:absolute;border-radius:6px;box-shadow:0 8px 18px rgba(2,6,23,0.12);
+    background-repeat:no-repeat;background-size:cover;transition:left 220ms cubic-bezier(.2,.9,.2,1), top 220ms cubic-bezier(.2,.9,.2,1), transform 120ms ease;
+    border:2px solid rgba(255,255,255,0.7);box-sizing:border-box;touch-action:none;
+  }
+  .tile.dragging{transform:scale(1.03);box-shadow:0 20px 30px rgba(2,6,23,0.18);z-index:999}
+  .tile.locked{border:2px solid #16a34a;box-shadow:0 10px 22px rgba(16,163,127,0.15);cursor:default;pointer-events:none}
+
+  .meta{font-size:0.93rem;color:#334;text-align:center;margin-top:6px}
+  .win{display:none;margin-top:10px;background:linear-gradient(90deg,#f0fff4,#f9fffb);border:1px solid #cfeece;padding:10px;border-radius:8px;color:#065f46;font-weight:700}
+  .win.show{display:block}
+
+  footer{margin-top:14px;text-align:center;color:#6b7280;font-size:0.88rem}
+
+  @media (max-width:880px){
+    .main{flex-direction:column;align-items:center}
+    .preview{order:2}
+    .canvas-area{order:1}
+    .preview .thumb{width:160px;height:110px}
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>🧩 Puzzelo</h1>
+      <p class="lead">Responsive puzzle with snap & lock. Choose preset, upload, or paste a URL.</p>
+    </header>
+
+    <div class="controls" role="region" aria-label="controls">
+      <label class="inline">Preset:
+        <select id="presetSelect" aria-label="preset images"></select>
+      </label>
+
+      <label class="inline">Or paste URL:
+        <input id="urlInput" type="text" placeholder="https://... (optional)" style="min-width:230px" />
+      </label>
+
+      <label class="inline">Difficulty:
+        <select id="difficulty">
+          <option value="3">3 × 3</option>
+          <option value="4">4 × 4</option>
+          <option value="6">6 × 6</option>
+        </select>
+      </label>
+
+      <label class="inline" title="Upload your own image">
+        <input id="uploadFile" type="file" accept="image/*" style="display:none" />
+        <button id="uploadBtn" type="button">Upload</button>
+      </label>
+
+      <button id="startBtn" type="button">Start</button>
+    </div>
+
+    <div class="main">
+      <div class="canvas-area">
+        <div id="canvasContainer" aria-hidden="false">
+          <div id="puzzleCanvas" style="width:420px;height:320px">
+            <div class="grid-overlay" id="gridOverlay"></div>
+          </div>
+        </div>
+        <div class="meta">
+          <span id="moveCounter">Moves: 0</span>
+        </div>
+        <div id="winBox" class="win">🎉 You solved it!</div>
+      </div>
+
+      <div class="preview">
+        <div class="thumb"><img id="previewImage" alt="preview"></div>
+        <div style="margin-top:8px;text-align:center">
+          <small style="color:#444">Thumbnail preview</small>
+        </div>
+      </div>
+    </div>
+
+    <footer>Use GitHub raw URLs for stable hosted images. Uploads work locally.</footer>
+  </div>
+
+<script>
+/* Final plain JS puzzle with responsive auto-sizing and rectangular support.
+   Presets use the user-provided raw.githubusercontent links.
+*/
+
+(() => {
+  // ---------- Preset list (use exactly the URLs you gave) ----------
+  const PRESETS = [
+    { name: "Goku (Dragon Ball)", url: "https://raw.githubusercontent.com/KnightHorse777/Puzzelo/3b76b305831143e28582f781c097b3489201a574/images/Goku.webp" },
+    { name: "Naruto (Anime)", url: "https://raw.githubusercontent.com/KnightHorse777/Puzzelo/879c1147e74259fb507ae07dd93304fbddd2863b/images/Naruto.webp" },
+    { name: "The Jester (Movie)", url: "https://raw.githubusercontent.com/KnightHorse777/Puzzelo/879c1147e74259fb507ae07dd93304fbddd2863b/images/The%20Jester.jpg" },
+    { name: "COD (Game)", url: "https://raw.githubusercontent.com/KnightHorse777/Puzzelo/3b76b305831143e28582f781c097b3489201a574/images/COD.webp" },
+    { name: "Minecraft (Movie)", url: "https://raw.githubusercontent.com/KnightHorse777/Puzzelo/879c1147e74259fb507ae07dd93304fbddd2863b/images/Minecraft.jpg" }
+  ];
+
+  // DOM refs
+  const presetSelect = document.getElementById('presetSelect');
+  const previewImage = document.getElementById('previewImage');
+  const urlInput = document.getElementById('urlInput');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const uploadFile = document.getElementById('uploadFile');
+  const startBtn = document.getElementById('startBtn');
+  const difficulty = document.getElementById('difficulty');
+  const puzzleCanvas = document.getElementById('puzzleCanvas');
+  const gridOverlay = document.getElementById('gridOverlay');
+  const canvasContainer = document.getElementById('canvasContainer');
+  const moveCounter = document.getElementById('moveCounter');
+  const winBox = document.getElementById('winBox');
+
+  // state
+  let imageUrl = PRESETS[0].url;
+  let imgNaturalW = 1, imgNaturalH = 1;
+  let cellW = 100, cellH = 100;
+  let gridN = 3;
+  let tiles = []; // tile objects {el, correctCell, currentCell, locked}
+  let cellMap = []; // index -> tile or null
+  let moves = 0;
+  const SNAP_DIST = 18; // px threshold for snapping (will be scaled a bit by cell size)
+  const MAX_CANVAS_WIDTH = 900; // px cap
+  const PADDING = 12;
+
+  // populate preset select
+  PRESETS.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.url;
+    o.textContent = p.name;
+    presetSelect.appendChild(o);
+  });
+  presetSelect.value = imageUrl;
+  previewImage.src = imageUrl;
+
+  // helper: load image and get natural size
+  function loadImageInfo(url){ 
+    return new Promise(resolve => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve({w: img.naturalWidth, h: img.naturalHeight});
+      img.onerror = () => resolve({w: 800, h: 600});
+      img.src = url;
+    });
+  }
+
+  // handlers
+  presetSelect.addEventListener('change', () => {
+    imageUrl = presetSelect.value;
+    previewImage.src = imageUrl;
+    urlInput.value = "";
+  });
+
+  urlInput.addEventListener('change', () => {
+    const v = urlInput.value.trim();
+    if (!v) return;
+    imageUrl = v;
+    previewImage.src = imageUrl;
+    presetSelect.value = "";
+  });
+
+  uploadBtn.addEventListener('click', () => uploadFile.click());
+  uploadFile.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    imageUrl = URL.createObjectURL(f);
+    previewImage.src = imageUrl;
+    presetSelect.value = "";
+    urlInput.value = "";
+  });
+
+  // main start
+  startBtn.addEventListener('click', async () => {
+    gridN = parseInt(difficulty.value, 10) || 3;
+    await startPuzzle();
+  });
+
+  // Compute canvas size to fill available width while honoring image aspect ratio
+  function computeCanvasDims(naturalW, naturalH){
+    // available width = container width minus padding
+    const containerStyleWidth = canvasContainer.clientWidth || Math.min(window.innerWidth - 40, MAX_CANVAS_WIDTH);
+    const maxW = Math.min(containerStyleWidth - PADDING, MAX_CANVAS_WIDTH);
+    // we want canvas width to try to fill maxW, but not exceed natural size strongly
+    const ratio = naturalW / naturalH;
+    let w = maxW;
+    let h = Math.round(w / ratio);
+    // if height would be too small or too big relative, adjust
+    if (h > window.innerHeight * 0.75) {
+      h = Math.round(window.innerHeight * 0.75);
+      w = Math.round(h * ratio);
+    }
+    // ensure minimum sensible sizes
+    w = Math.max(260, Math.min(w, MAX_CANVAS_WIDTH));
+    h = Math.max(200, Math.min(h, MAX_CANVAS_WIDTH));
+    return {w,h};
+  }
+
+  // Start puzzle: create tiles, shuffle them, position
+  async function startPuzzle(){
+    // cleanup existing
+    tiles.forEach(t => t.el && t.el.remove());
+    tiles = [];
+    cellMap = [];
+    moves = 0;
+    moveCounter.textContent = `Moves: ${moves}`;
+    winBox.classList.remove('show');
+
+    // load image natural dims
+    const info = await loadImageInfo(imageUrl);
+    imgNaturalW = info.w; imgNaturalH = info.h;
+
+    // compute canvas dims
+    const dims = computeCanvasDims(imgNaturalW, imgNaturalH);
+    puzzleCanvas.style.width = dims.w + "px";
+    puzzleCanvas.style.height = dims.h + "px";
+
+    // compute cell sizes (rectangular allowed)
+    cellW = Math.floor(dims.w / gridN);
+    cellH = Math.floor(dims.h / gridN);
+
+    // set grid overlay background size to cellW x cellH
+    gridOverlay.style.backgroundSize = `${cellW}px ${cellH}px`;
+    gridOverlay.style.width = `${dims.w}px`;
+    gridOverlay.style.height = `${dims.h}px`;
+
+    // total cells
+    const total = gridN * gridN;
+    cellMap = new Array(total).fill(null);
+
+    // create tile elements (one per correct cell)
+    for (let r=0;r<gridN;r++){
+      for (let c=0;c<gridN;c++){
+        const idx = r*gridN + c;
+        const el = document.createElement('div');
+        el.className = 'tile';
+        el.style.width = cellW + 'px';
+        el.style.height = cellH + 'px';
+        // background should be entire image sized to canvas dims
+        el.style.backgroundImage = `url(${imageUrl})`;
+        el.style.backgroundSize = `${dims.w}px ${dims.h}px`;
+        el.style.backgroundPosition = `-${c*cellW}px -${r*cellH}px`;
+        // initial left/top placeholder (we'll set after shuffle)
+        el.style.left = '0px'; el.style.top = '0px';
+
+        puzzleCanvas.appendChild(el);
+
+        tiles.push({
+          el,
+          correctCell: idx,
+          currentCell: idx,
+          locked: false
+        });
+      }
+    }
+
+    // shuffle assignment of tiles to cells
+    const cellIndices = Array.from({length: total},(_,i)=>i);
+    shuffleArray(cellIndices);
+
+    // place tiles into mapped cells
+    tiles.forEach((t,i)=> {
+      const assigned = cellIndices[i];
+      t.currentCell = assigned;
+      cellMap[assigned] = t;
+      const xy = cellIndexToXY(assigned);
+      setTilePos(t.el, xy.x, xy.y, false);
+      makeDraggable(t);
+    });
+
+    // truth-check: if some tile ended up already in correct cell and we want a full shuffle, we can swap two
+    if (tiles.every(t=>t.currentCell===t.correctCell)) {
+      // swap first two
+      if (tiles.length>1) {
+        const a=tiles[0], b=tiles[1];
+        const aCell=a.currentCell, bCell=b.currentCell;
+        a.currentCell=bCell; b.currentCell=aCell;
+        cellMap[aCell]=b; cellMap[bCell]=a;
+        setTilePos(a.el, ...Object.values(cellIndexToXY(a.currentCell)), true);
+        setTilePos(b.el, ...Object.values(cellIndexToXY(b.currentCell)), true);
+      }
+    }
+  }
+
+  // position helpers
+  function cellIndexToXY(index){
+    const col = index % gridN;
+    const row = Math.floor(index / gridN);
+    return {x: col*cellW, y: row*cellH};
+  }
+  function setTilePos(el,x,y,animate=true){
+    if (!animate){
+      el.style.transition = 'none';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      // reflow
+      void el.offsetWidth;
+      el.style.transition = '';
+    } else {
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+    }
+  }
+
+  // draggable via pointer events (works for mouse & touch)
+  function makeDraggable(tileObj){
+    const el = tileObj.el;
+    let dragging = false;
+    let pointerId = null;
+    let offset = {x:0,y:0};
+    const onDown = (ev) => {
+      if (tileObj.locked) return;
+      ev.preventDefault();
+      el.setPointerCapture?.(ev.pointerId);
+      pointerId = ev.pointerId;
+      dragging = true;
+      el.classList.add('dragging');
+      // compute offset inside element
+      const rect = el.getBoundingClientRect();
+      const canvasRect = puzzleCanvas.getBoundingClientRect();
+      offset.x = ev.clientX - rect.left;
+      offset.y = ev.clientY - rect.top;
+      // bring forward
+      el.style.zIndex = 999;
+    };
+    const onMove = (ev) => {
+      if (!dragging || ev.pointerId !== pointerId) return;
+      const canvasRect = puzzleCanvas.getBoundingClientRect();
+      let x = ev.clientX - canvasRect.left - offset.x;
+      let y = ev.clientY - canvasRect.top - offset.y;
+      // clamp
+      x = Math.max(0, Math.min(canvasRect.width - cellW, x));
+      y = Math.max(0, Math.min(canvasRect.height - cellH, y));
+      setTilePos(el, x, y, false);
+    };
+    const onUp = (ev) => {
+      if (!dragging || ev.pointerId !== pointerId) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      el.style.zIndex = '';
+      // determine nearest cell based on center
+      const left = parseFloat(el.style.left);
+      const top = parseFloat(el.style.top);
+      const centerX = left + cellW/2;
+      const centerY = top + cellH/2;
+      const col = Math.floor(centerX / cellW);
+      const row = Math.floor(centerY / cellH);
+      const targetIndex = Math.max(0, Math.min(gridN-1, col)) + Math.max(0, Math.min(gridN-1, row)) * gridN;
+
+      // check distance to own correct cell for snap-lock
+      const correctXY = cellIndexToXY(tileObj.correctCell);
+      const distToCorrect = Math.hypot(correctXY.x - left, correctXY.y - top);
+
+      // if close to own correct spot -> place there and lock
+      const threshold = Math.max(SNAP_DIST, Math.min(cellW, cellH) * 0.25);
+      if (distToCorrect <= threshold){
+        placeTileAt(tileObj, tileObj.correctCell, true);
+        return;
+      }
+
+      // else attempt to place into target cell (swap if needed)
+      placeTileAt(tileObj, targetIndex, true);
+    };
+
+    el.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    // also support pointercancel
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  // Attempt to place tileObj into cellIndex
+  function placeTileAt(tileObj, cellIndex, animate){
+    cellIndex = Math.max(0, Math.min(gridN*gridN - 1, cellIndex));
+    const occupant = cellMap[cellIndex];
+
+    // if same tile, just snap back
+    if (occupant === tileObj){
+      const xy = cellIndexToXY(cellIndex);
+      setTilePos(tileObj.el, xy.x, xy.y, animate);
+      checkAndLock(tileObj, cellIndex);
+      return;
+    }
+
+    // if no occupant -> move
+    if (!occupant){
+      const orig = tileObj.currentCell;
+      cellMap[orig] = null;
+      cellMap[cellIndex] = tileObj;
+      tileObj.currentCell = cellIndex;
+      const xy = cellIndexToXY(cellIndex);
+      setTilePos(tileObj.el, xy.x, xy.y, animate);
+      incrementMoves();
+      checkAndLock(tileObj, cellIndex);
+      return;
+    }
+
+    // occupant exists
+    if (occupant.locked){
+      // can't replace a locked tile -> revert
+      const xy = cellIndexToXY(tileObj.currentCell);
+      setTilePos(tileObj.el, xy.x, xy.y, animate);
+      return;
+    }
+
+    // swap tileObj and occupant
+    const aCell = tileObj.currentCell;
+    const bCell = occupant.currentCell;
+    // swap map
+    cellMap[aCell] = occupant;
+    cellMap[bCell] = tileObj;
+    // update currentCell fields
+    tileObj.currentCell = bCell;
+    occupant.currentCell = aCell;
+    // animate both
+    const xyA = cellIndexToXY(tileObj.currentCell);
+    const xyB = cellIndexToXY(occupant.currentCell);
+    setTilePos(tileObj.el, xyA.x, xyA.y, animate);
+    setTilePos(occupant.el, xyB.x, xyB.y, animate);
+    incrementMoves();
+    // check for lock on either
+    checkAndLock(tileObj, tileObj.currentCell);
+    checkAndLock(occupant, occupant.currentCell);
+  }
+
+  function checkAndLock(tileObj, cellIndex){
+    if (tileObj.correctCell === cellIndex){
+      // snap exactly and lock
+      const xy = cellIndexToXY(cellIndex);
+      setTilePos(tileObj.el, xy.x, xy.y, true);
+      tileObj.locked = true;
+      tileObj.el.classList.add('locked');
+      tileObj.el.style.pointerEvents = 'none';
+      // show win if all locked
+      setTimeout(checkWin, 250);
+    } else {
+      tileObj.locked = false;
+      tileObj.el.classList.remove('locked');
+      tileObj.el.style.pointerEvents = '';
+    }
+  }
+
+  function incrementMoves(){
+    moves++;
+    moveCounter.textContent = `Moves: ${moves}`;
+  }
+
+  function checkWin(){
+    const allLocked = tiles.length>0 && tiles.every(t=>t.locked);
+    if (allLocked) winBox.classList.add('show');
+  }
+
+  // small shuffle util
+  function shuffleArray(a){
+    for (let i=a.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [a[i],a[j]] = [a[j],a[i]];
+    }
+    return a;
+  }
+
+  // responsive: recompute canvas if window resizes (only when not mid-game?)
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    // if puzzle exists, restart with same image & difficulty to resize canvas & tiles
+    if (!tiles.length) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      // re-run start to adapt sizing while preserving current image & difficulty
+      // note: this will re-shuffle; if you prefer to preserve positions on resize we'd need to recalc positions without shuffling.
+      startPuzzle();
+    }, 300);
+  });
+
+  // allow Enter to start
+  document.addEventListener('keydown', (e) => { if (e.key==='Enter') startBtn.click(); });
+
+  // initial preview defaults
+  previewImage.src = imageUrl;
+
+  // expose startPuzzle to console if needed
+  window.startPuzzle = startPuzzle;
+
+})();
+</script>
+</body>
+</html>
